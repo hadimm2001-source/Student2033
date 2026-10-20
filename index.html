@@ -645,6 +645,10 @@
                         <input type="text" id="adminExcusesSearchInput" class="form-input" style="padding-right: 36px;" placeholder="🔍 بحث باسم الطالب أو الصف أو السجل المدني..." oninput="window.filterAdminExcuses()">
                     </div>
                     <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button id="adminExcusesSortBtn" type="button" class="btn" style="background: #ffffff; color: #1e293b; border: 1.5px solid #cbd5e1; padding: 7px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); cursor: pointer;" onclick="window.toggleAdminExcusesSortOrder()" title="تبديل ترتيب الأعذار بالتاريخ">
+                            <span id="adminExcusesSortIcon">📅 ⬇️</span>
+                            <span id="adminExcusesSortText">التاريخ: الأحدث أولاً</span>
+                        </button>
                         <button class="btn" style="background: #0284c7; color: white; padding: 7px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px;" onclick="window.downloadAllAvailableAttachments()" title="تحميل جميع المرفقات المتاحة">
                             <span>📥</span>
                             <span>تحميل جميع المرفقات المتوفرة</span>

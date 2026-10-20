@@ -10,7 +10,11 @@ import {
 window.appId = 'school-attendance-final-v3';
 let isCloudSynced = false;
 let unsubscribeLive = null;
+let unsubscribeDailyRecords = null;
 let unsubscribeExcuses = null;
+let dirtyDates = new Set();
+let deletedDates = new Set();
+let adminExcusesSortOrder = 'desc'; // 'desc' = من الأحدث إلى الأقدم, 'asc' = من الأقدم إلى الأحدث
 
 const firebaseConfig = {
     apiKey: "AIzaSyCVdLikyOhh7wc29omVblZzNdEG3rakoeA",
@@ -283,12 +287,70 @@ function deserializeAttendanceData(docData) {
     return {};
 }
 
-// Setup real-time listeners
+// Helper to get precise timestamp for sorting excuses by absence date
+function getExcuseTimestamp(e) {
+    if (!e || !e.date) return 0;
+    const parts = String(e.date).trim().split(/[-/]/);
+    if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const d = parseInt(parts[2], 10);
+        if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+            return new Date(y, m - 1, d).getTime();
+        }
+    }
+    const t = Date.parse(e.date);
+    return isNaN(t) ? 0 : t;
+}
+
+// Arabic day name helper for clear visual presentation
+function getArabicDayName(dateStr) {
+    if (!dateStr) return '';
+    try {
+        const parts = String(dateStr).trim().split(/[-/]/);
+        if (parts.length === 3) {
+            const dt = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+            const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+            return days[dt.getDay()] || '';
+        }
+    } catch (e) {}
+    return '';
+}
+
+// Setup real-time listeners & excuses sorting
+function sortCloudExcuses() {
+    cloudExcuses.sort((a, b) => {
+        const timeA = getExcuseTimestamp(a);
+        const timeB = getExcuseTimestamp(b);
+        if (timeA !== timeB) {
+            return adminExcusesSortOrder === 'asc' ? (timeA - timeB) : (timeB - timeA);
+        }
+        const cA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const cB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return adminExcusesSortOrder === 'asc' ? (cA - cB) : (cB - cA);
+    });
+}
+
+window.toggleAdminExcusesSortOrder = function() {
+    adminExcusesSortOrder = (adminExcusesSortOrder === 'desc') ? 'asc' : 'desc';
+    sortCloudExcuses();
+    renderAdminExcusesList();
+    if (window.showBottomNotification) {
+        window.showBottomNotification(
+            'ترتيب الأعذار 📅',
+            adminExcusesSortOrder === 'desc' 
+                ? 'تم الترتيب حسب التاريخ: من الأحدث للأقدم ⬇️' 
+                : 'تم الترتيب حسب التاريخ: من الأقدم للأحدث ⬆️',
+            'info'
+        );
+    }
+};
+
 function initCloudListeners() {
+    // 1. Listen to global state and students master list (strictly lightweight document)
     if (unsubscribeLive) unsubscribeLive();
     const liveDocRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', 'shared_attendance', 'live_state');
     unsubscribeLive = onSnapshot(liveDocRef, (snap) => {
-        // Skip processing our own local pending latency-compensation writes to avoid redundant loops
         if (snap.metadata && snap.metadata.hasPendingWrites) {
             return;
         }
@@ -309,25 +371,27 @@ function initCloudListeners() {
                 }
             }
 
+            // Fallback for legacy records if present
             const incomingRecords = deserializeAttendanceData(data);
             if (incomingRecords && typeof incomingRecords === 'object' && Object.keys(incomingRecords).length > 0) {
-                attendanceData = { ...attendanceData, ...incomingRecords };
+                if (isAttendanceDirty) {
+                    attendanceData = { ...incomingRecords, ...attendanceData };
+                } else {
+                    attendanceData = { ...attendanceData, ...incomingRecords };
+                }
                 localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
             }
 
-            lastSyncedDataHash = computeDataHash(students, attendanceData);
-            updateCloudIndicator(true);
+            if (!isAttendanceDirty && dirtyDates.size === 0) {
+                lastSyncedDataHash = computeDataHash(students, attendanceData);
+            }
+            updateCloudIndicator(!isAttendanceDirty && dirtyDates.size === 0);
             updateHistorySelector();
             if (document.getElementById('appContainer').style.display !== 'none') {
                 renderTable();
             }
-            if (document.getElementById('studentPortalView').style.display !== 'none') {
+            if (document.getElementById('studentPortalView').style.display !== 'none' && activeFamilyStudents && activeFamilyStudents[currentFamilyIndex]) {
                 renderStudentDashboard(activeFamilyStudents[currentFamilyIndex]);
-            }
-
-            // Auto-migrate old Firestore document if it lacks serialized recordsJson or is on older sync version
-            if (!data.recordsJson && (!data.syncVersion || data.syncVersion !== '3.1')) {
-                syncToCloud(true);
             }
         }
     }, (err) => {
@@ -335,6 +399,57 @@ function initCloudListeners() {
         updateCloudIndicator(false);
     });
 
+    // 2. Listen to dedicated per-day attendance records collection (daily_records)
+    // Ensures changes for any date (including yesterday or previous days) are real-time, isolated, and never hit document size limits
+    if (unsubscribeDailyRecords) unsubscribeDailyRecords();
+    const dailyRecordsCol = collection(window.db, 'artifacts', window.appId, 'public', 'data', 'daily_records');
+    unsubscribeDailyRecords = onSnapshot(dailyRecordsCol, (snap) => {
+        if (snap.metadata && snap.metadata.hasPendingWrites) {
+            return;
+        }
+        let hasChanges = false;
+        snap.docChanges().forEach(change => {
+            const dayId = change.doc.id;
+            if (change.type === 'removed') {
+                if (attendanceData[dayId]) {
+                    delete attendanceData[dayId];
+                    hasChanges = true;
+                }
+            } else {
+                const docData = change.doc.data() || {};
+                if (docData.recordsJson && typeof docData.recordsJson === 'string') {
+                    try {
+                        const parsedDay = JSON.parse(docData.recordsJson);
+                        // Do not overwrite date if currently being edited/dirty on this client
+                        if (!dirtyDates.has(dayId)) {
+                            attendanceData[dayId] = parsedDay;
+                            hasChanges = true;
+                        }
+                    } catch (e) {
+                        console.warn(`Failed to parse daily_records for date ${dayId}:`, e);
+                    }
+                }
+            }
+        });
+
+        if (hasChanges) {
+            localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
+            if (!isAttendanceDirty && dirtyDates.size === 0) {
+                lastSyncedDataHash = computeDataHash(students, attendanceData);
+            }
+            updateHistorySelector();
+            if (document.getElementById('appContainer').style.display !== 'none') {
+                renderTable();
+            }
+            if (document.getElementById('studentPortalView').style.display !== 'none' && activeFamilyStudents && activeFamilyStudents[currentFamilyIndex]) {
+                renderStudentDashboard(activeFamilyStudents[currentFamilyIndex]);
+            }
+        }
+    }, (err) => {
+        console.warn("Firestore daily_records snapshot error:", err);
+    });
+
+    // 3. Listen to excuses collection and sort chronologically
     if (unsubscribeExcuses) unsubscribeExcuses();
     const excusesCol = collection(window.db, 'artifacts', window.appId, 'public', 'data', 'excuses');
     unsubscribeExcuses = onSnapshot(excusesCol, (snap) => {
@@ -351,6 +466,7 @@ function initCloudListeners() {
                 recipientEmail: data.recipientEmail || officialAdminEmail
             });
         });
+        sortCloudExcuses();
         updateExcusesBadge();
         const portalView = document.getElementById('studentPortalView');
         if (portalView && portalView.style.display !== 'none' && activeFamilyStudents && activeFamilyStudents[currentFamilyIndex]) {
@@ -370,13 +486,14 @@ function initCloudListeners() {
     });
 }
 
-// Robust Cloud Sync Manager (Prevents write stream exhaustion and respects Firestore 1-write/sec limit)
+// Robust Cloud Sync Manager (Dedicated daily_records architecture)
 let syncDebounceTimer = null;
 let isSyncInProgress = false;
 let hasPendingSync = false;
+let isAttendanceDirty = false;
 let lastSyncedDataHash = null;
 let lastSyncTimestamp = 0;
-const MIN_SYNC_INTERVAL_MS = 1200; // Strict limit to prevent single-document write contention
+const MIN_SYNC_INTERVAL_MS = 600; // Fast and responsive writes per day
 let syncBackoffDelay = 0;
 
 function computeDataHash(studentsArr, attendanceObj) {
@@ -384,12 +501,29 @@ function computeDataHash(studentsArr, attendanceObj) {
         const sCount = studentsArr ? studentsArr.length : 0;
         const firstId = studentsArr && studentsArr[0] ? studentsArr[0].id : '';
         const lastId = studentsArr && studentsArr[sCount - 1] ? studentsArr[sCount - 1].id : '';
-        const attDates = Object.keys(attendanceObj || {});
-        let recordsCount = 0;
+        const attDates = Object.keys(attendanceObj || {}).sort();
+        let pTotal = 0, aTotal = 0, lTotal = 0, eTotal = 0;
+        let dateHash = '';
         attDates.forEach(d => {
-            recordsCount += Object.keys(attendanceObj[d] || {}).length;
+            const dayRec = attendanceObj[d] || {};
+            let dp = 0, da = 0, dl = 0, de = 0;
+            let dayCheck = 0;
+            for (const id in dayRec) {
+                const rec = dayRec[id];
+                const st = (rec && rec.status) || '';
+                if (st === 'present') dp++;
+                else if (st === 'absent') da++;
+                else if (st === 'late') dl++;
+                else if (st === 'excused') de++;
+                dayCheck = (dayCheck * 33 + id.charCodeAt(id.length - 1) + st.charCodeAt(0)) | 0;
+            }
+            pTotal += dp;
+            aTotal += da;
+            lTotal += dl;
+            eTotal += de;
+            dateHash += `${d}:${dp},${da},${dl},${de},${dayCheck}|`;
         });
-        return `${sCount}:${firstId}:${lastId}|${attDates.length}:${recordsCount}`;
+        return `${sCount}:${firstId}:${lastId}|P${pTotal}:A${aTotal}:L${lTotal}:E${eTotal}|${dateHash}`;
     } catch {
         return Math.random().toString();
     }
@@ -416,7 +550,7 @@ async function executeCloudSync() {
     }
 
     const currentHash = computeDataHash(students, attendanceData);
-    if (lastSyncedDataHash && currentHash === lastSyncedDataHash && !hasPendingSync) {
+    if (!isAttendanceDirty && dirtyDates.size === 0 && deletedDates.size === 0 && lastSyncedDataHash && currentHash === lastSyncedDataHash && !hasPendingSync) {
         updateCloudIndicator(true);
         return;
     }
@@ -425,42 +559,66 @@ async function executeCloudSync() {
     hasPendingSync = false;
 
     try {
+        // 1. Sync deleted dates from daily_records collection
+        if (deletedDates.size > 0) {
+            for (const d of Array.from(deletedDates)) {
+                try {
+                    const dayDocRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', 'daily_records', d);
+                    await deleteDoc(dayDocRef);
+                    deletedDates.delete(d);
+                } catch (delErr) {
+                    console.warn(`Failed to delete daily_records document for ${d}:`, delErr);
+                }
+            }
+        }
+
+        // 2. Sync all dirty/modified dates directly to daily_records (each date is a compact ~20KB document)
+        const datesToSync = Array.from(dirtyDates);
+        if (datesToSync.length === 0 && (isAttendanceDirty || !lastSyncedDataHash) && currentSelectedDate) {
+            datesToSync.push(currentSelectedDate);
+        }
+
+        for (const d of datesToSync) {
+            try {
+                const dayRecords = attendanceData[d] || {};
+                const dayDocRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', 'daily_records', d);
+                await setDoc(dayDocRef, {
+                    date: d,
+                    recordsJson: JSON.stringify(dayRecords),
+                    recordsCount: Object.keys(dayRecords).length,
+                    lastUpdated: new Date().toISOString()
+                });
+                dirtyDates.delete(d);
+            } catch (dayErr) {
+                console.error(`Failed to sync daily_records for date ${d}:`, dayErr);
+            }
+        }
+
+        // 3. Keep live_state lightweight and safely below 250KB (students master list, syncVersion, lastUpdated)
         const liveDocRef = doc(window.db, 'artifacts', window.appId, 'public', 'data', 'shared_attendance', 'live_state');
-        const serializedRecords = serializeAttendanceData(attendanceData);
         const serializedStudents = JSON.stringify(students || []);
-
-        // Important: Keep only a shallow summary in records (current day only) for legacy readers,
-        // avoiding deep nested objects that trigger Firestore's 40,000 maximum index entries per entity.
-        const currentDayRecords = (currentSelectedDate && attendanceData[currentSelectedDate])
-            ? { [currentSelectedDate]: attendanceData[currentSelectedDate] }
-            : {};
-
-        // Important: Overwrite document without { merge: true } so Firestore completely drops
-        // the 40,000+ old nested index entries from the entity on the server.
         await setDoc(liveDocRef, {
             students: students,
             studentsJson: serializedStudents,
-            ...serializedRecords,
-            records: currentDayRecords,
             lastUpdated: new Date().toISOString(),
-            syncVersion: '3.1'
+            syncVersion: '4.0'
         });
 
         lastSyncedDataHash = currentHash;
         lastSyncTimestamp = Date.now();
-        syncBackoffDelay = 0; // Reset backoff on success
-        updateCloudIndicator(true);
+        isAttendanceDirty = dirtyDates.size > 0;
+        syncBackoffDelay = 0;
+        updateCloudIndicator(dirtyDates.size === 0);
     } catch (e) {
         console.error("Cloud sync error:", e);
         updateCloudIndicator(false);
-        // Exponential backoff to avoid overloading Firestore backend
         if (e && (e.code === 'resource-exhausted' || (e.message && e.message.includes('resource-exhausted')))) {
             syncBackoffDelay = Math.min(10000, (syncBackoffDelay || 2000) * 2);
             console.warn(`Applying Firestore backoff delay of ${syncBackoffDelay}ms`);
         }
     } finally {
         isSyncInProgress = false;
-        if (hasPendingSync) {
+        if (hasPendingSync || isAttendanceDirty || dirtyDates.size > 0) {
             hasPendingSync = false;
             if (!syncDebounceTimer) {
                 syncDebounceTimer = setTimeout(() => {
@@ -487,7 +645,7 @@ function syncToCloud(immediate = false) {
             syncDebounceTimer = null;
             await executeCloudSync();
             resolve();
-        }, 1000);
+        }, 400);
     });
 }
 window.syncToCloud = syncToCloud;
@@ -870,6 +1028,7 @@ window.handleFilter = function() {
 window.clearCurrentDayHolidayRecords = function() {
     showConfirm('مسح سجلات اليوم', `اليوم عطلة رسمية. هل أنت متأكد من رغبتك في مسح وإلغاء جميع سجلات التحضير المرصودة لتاريخ (${currentSelectedDate}) ليعود يوماً خالياً من الرصد؟`, () => {
         delete attendanceData[currentSelectedDate];
+        isAttendanceDirty = true;
         localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
         syncToCloud();
         initAdminView();
@@ -916,6 +1075,7 @@ window.markStatus = function(studentId, status) {
         };
         isNewlyMarked = true;
     }
+    isAttendanceDirty = true;
     localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
 
     // إذا تم رصد الحالة (ع - بعذر)، نقوم تلقائياً بتحديث واعتماد أي عذر مسجل أو قيد المراجعة لهذا الطالب في هذا التاريخ
@@ -976,6 +1136,7 @@ window.markBulk = function(status) {
             attendanceData[currentSelectedDate][s.id] = { status, time: timeStr };
         }
     });
+    isAttendanceDirty = true;
     localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
     renderTable();
     checkHoliday();
@@ -984,6 +1145,7 @@ window.markBulk = function(status) {
 };
 
 window.syncDirectly = async function() {
+    isAttendanceDirty = true;
     await syncToCloud(true);
     showAlert('نجاح', 'تمت المزامنة المباشرة مع السحابة وقاعدة البيانات بنجاح ✅');
 };
@@ -1096,6 +1258,9 @@ function updateHistorySelector() {
 
 window.loadHistoricalData = function(d) {
     if (!d) return;
+    if (isAttendanceDirty || hasPendingSync) {
+        syncToCloud(true);
+    }
     currentSelectedDate = d;
     if (!attendanceData[d]) {
         attendanceData[d] = {};
@@ -1144,6 +1309,9 @@ window.goToNextArchiveDay = function() {
 };
 
 window.returnToToday = function() {
+    if (isAttendanceDirty || hasPendingSync) {
+        syncToCloud(true);
+    }
     currentSelectedDate = getTodayDate();
     const datePicker = document.getElementById('historyDatePicker');
     if (datePicker) {
@@ -1158,6 +1326,7 @@ window.returnToToday = function() {
 window.confirmDeleteHistoryDay = function() {
     showConfirm('تأكيد الحذف', `هل أنت متأكد من رغبتك في حذف سجلات تاريخ ${currentSelectedDate} نهائياً؟`, () => {
         delete attendanceData[currentSelectedDate];
+        isAttendanceDirty = true;
         localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
         syncToCloud();
         returnToToday();
@@ -1167,6 +1336,7 @@ window.confirmDeleteHistoryDay = function() {
 window.confirmResetMonth = function() {
     showConfirm('تصفير لشهر جديد', 'هل أنت متأكد من تصفير سجلات الحضور لبداية شهر جديد مع الاحتفاظ ببيانات الطلاب؟', () => {
         attendanceData = {};
+        isAttendanceDirty = true;
         localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
         syncToCloud();
         initAdminView();
@@ -1208,6 +1378,7 @@ window.saveNewStudent = function() {
     closeModals();
     populateClassFilter();
     renderTable();
+    isAttendanceDirty = true;
     syncToCloud();
     showAlert('نجاح', 'تمت إضافة الطالب بنجاح ✅');
 };
@@ -1237,6 +1408,7 @@ window.saveStudentEdit = function() {
     closeModals();
     populateClassFilter();
     renderTable();
+    isAttendanceDirty = true;
     syncToCloud();
     showAlert('نجاح', 'تم تحديث بيانات الطالب بنجاح ✅');
 };
@@ -1246,6 +1418,7 @@ window.deleteStudent = function(id) {
         students = students.filter(item => item.id !== id);
         localStorage.setItem('students_list_master_v3', JSON.stringify(students));
         renderTable();
+        isAttendanceDirty = true;
         syncToCloud();
     });
 };
@@ -1577,6 +1750,16 @@ function renderStudentExcuses(student) {
         if (student.id && e.studentId && e.studentId === student.id) return true;
         if (student.name && e.studentName && e.studentName.trim() === student.name.trim()) return true;
         return false;
+    });
+
+    // Sort student's excuses strictly by absence date descending (newest first)
+    list.sort((a, b) => {
+        const timeA = getExcuseTimestamp(a);
+        const timeB = getExcuseTimestamp(b);
+        if (timeA !== timeB) return timeB - timeA;
+        const cA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const cB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return cB - cA;
     });
 
     if (list.length === 0) {
@@ -2082,6 +2265,19 @@ function renderAdminExcusesList() {
     const c = document.getElementById('adminExcusesContent');
     if (!c) return;
 
+    // Update sort button text and icon in UI
+    const sortBtnText = document.getElementById('adminExcusesSortText');
+    const sortBtnIcon = document.getElementById('adminExcusesSortIcon');
+    if (sortBtnText) {
+        sortBtnText.textContent = adminExcusesSortOrder === 'desc' ? 'التاريخ: الأحدث أولاً ⬇️' : 'التاريخ: الأقدم أولاً ⬆️';
+    }
+    if (sortBtnIcon) {
+        sortBtnIcon.textContent = adminExcusesSortOrder === 'desc' ? '📅 ⬇️' : '📅 ⬆️';
+    }
+
+    // Always sort cloudExcuses
+    sortCloudExcuses();
+
     // 1. Calculate Tab Counts
     const countAll = cloudExcuses.length;
     const countPending = cloudExcuses.filter(e => normalizeExcuseStatus(e.status, e.adminReply) === 'pending').length;
@@ -2150,6 +2346,18 @@ function renderAdminExcusesList() {
         return true;
     });
 
+    // 3. Strictly sort filtered list by absence date according to adminExcusesSortOrder
+    filtered.sort((a, b) => {
+        const timeA = getExcuseTimestamp(a);
+        const timeB = getExcuseTimestamp(b);
+        if (timeA !== timeB) {
+            return adminExcusesSortOrder === 'asc' ? (timeA - timeB) : (timeB - timeA);
+        }
+        const cA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const cB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return adminExcusesSortOrder === 'asc' ? (cA - cB) : (cB - cA);
+    });
+
     if (filtered.length === 0) {
         c.innerHTML = `
             <div style="text-align:center; padding:35px 20px; color:var(--text-muted); background:#f8fafc; border-radius:12px; border:1px dashed #cbd5e1;">
@@ -2161,7 +2369,7 @@ function renderAdminExcusesList() {
         return;
     }
 
-    // 3. Render Excuses Cards
+    // 4. Render Excuses Cards
     let html = '';
     filtered.forEach(e => {
         // Resolve student details safely to avoid "undefined - undefined"
@@ -2185,6 +2393,8 @@ function renderAdminExcusesList() {
             statusText = 'مرفوض ✗';
         }
 
+        const dayName = getArabicDayName(e.date);
+
         html += `
             <div style="background:#ffffff; border:1px solid var(--border-color); border-radius:12px; padding:16px; margin-bottom:14px; box-shadow:0 1px 3px rgba(0,0,0,0.04); transition:all 0.2s;">
                 <!-- Header -->
@@ -2195,10 +2405,14 @@ function renderAdminExcusesList() {
                             <span style="background:#f1f5f9; color:#475569; padding:2.5px 8px; border-radius:6px; font-size:11.5px; font-weight:700; white-space:nowrap; display:inline-block; border:1px solid #e2e8f0; letter-spacing:-0.2px;">${displayClass}</span>
                             <span style="font-size:12px; color:#64748b; font-family:monospace;" dir="ltr">#${displayNid}</span>
                         </div>
-                        <div style="font-size:13px; color:var(--primary); font-weight:700; margin-top:5px; display:flex; align-items:center; gap:8px;">
+                        <div style="font-size:13px; color:var(--primary); font-weight:700; margin-top:5px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                             <span>${e.type || 'عذر غياب'}</span>
                             <span style="color:#cbd5e1;">•</span>
-                            <span style="color:#64748b;">تاريخ الغياب: <strong style="color:#0f172a;">${e.date || '-'}</strong></span>
+                            <span style="background:#eef2ff; color:#3730a3; padding:2px 8px; border-radius:6px; font-weight:800; border:1px solid #c7d2fe; display:inline-flex; align-items:center; gap:5px;">
+                                <span>📅</span>
+                                <span>تاريخ الغياب: <strong style="color:#1e1b4b;" dir="ltr">${e.date || '-'}</strong></span>
+                                ${dayName ? `<span style="color:#4f46e5; font-size:12px;">(${dayName})</span>` : ''}
+                            </span>
                             ${e.isCameraCaptured ? `<span style="background:#e0f2fe; color:#0369a1; padding:2px 6px; border-radius:4px; font-size:11px;">📸 تصوير مباشر</span>` : ''}
                         </div>
                     </div>
@@ -2587,6 +2801,7 @@ window.saveAdminReply = async function(id, replyText) {
                 } else {
                     attendanceData[item.date][sid].status = 'excused';
                 }
+                isAttendanceDirty = true;
                 localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
                 syncToCloud();
                 renderTable();
@@ -2655,6 +2870,7 @@ window.updateExcuseStatus = async function(id, status, optionalReplyText = null)
                 } else {
                     attendanceData[item.date][sid].status = 'excused';
                 }
+                isAttendanceDirty = true;
                 localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
                 syncToCloud();
                 renderTable();
@@ -4906,11 +5122,23 @@ window.printDateRangeReport = function() {
 window.exportExcusesToWord = function() {
     let title = `تقرير الأعذار والمبررات المرفوعة`;
     let body = generateWordLetterhead(title);
-    body += `<table class="content-table"><thead><tr><th>م</th><th>اسم الطالب</th><th>الصف</th><th>التاريخ</th><th>نوع العذر</th><th>الحالة</th><th>التفاصيل</th></tr></thead><tbody>`;
+    body += `<table class="content-table"><thead><tr><th>م</th><th>اسم الطالب</th><th>الصف</th><th>تاريخ الغياب</th><th>اليوم</th><th>نوع العذر</th><th>الحالة</th><th>التفاصيل</th></tr></thead><tbody>`;
 
-    cloudExcuses.forEach((e, idx) => {
-        let stArabic = e.status === 'accepted' ? 'مقبول' : (e.status === 'rejected' ? 'مرفوض' : 'قيد المراجعة');
-        body += `<tr><td>${idx + 1}</td><td>${e.studentName}</td><td>${e.studentClass}</td><td>${e.date}</td><td>${e.type}</td><td>${stArabic}</td><td>${e.desc || ''}</td></tr>`;
+    const sorted = [...cloudExcuses].sort((a, b) => {
+        const timeA = getExcuseTimestamp(a);
+        const timeB = getExcuseTimestamp(b);
+        if (timeA !== timeB) {
+            return adminExcusesSortOrder === 'asc' ? (timeA - timeB) : (timeB - timeA);
+        }
+        const cA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const cB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return adminExcusesSortOrder === 'asc' ? (cA - cB) : (cB - cA);
+    });
+
+    sorted.forEach((e, idx) => {
+        let stArabic = e.status === 'accepted' ? 'مقبول ومبرر' : (e.status === 'rejected' ? 'مرفوض' : 'قيد المراجعة');
+        const dayName = getArabicDayName(e.date);
+        body += `<tr><td style="text-align:center;">${idx + 1}</td><td>${e.studentName || '-'}</td><td>${e.studentClass || '-'}</td><td dir="ltr" style="text-align:center; font-weight:bold;">${e.date || '-'}</td><td style="text-align:center;">${dayName || '-'}</td><td>${e.type || 'عذر غياب'}</td><td style="text-align:center;">${stArabic}</td><td>${e.desc || '-'}</td></tr>`;
     });
 
     body += `</tbody></table>` + generateWordFooter();
@@ -7099,7 +7327,8 @@ window.restoreBackup = function(event) {
                 attendanceData = data.attendanceData;
                 localStorage.setItem('students_list_master_v3', JSON.stringify(students));
                 localStorage.setItem('student_attendance_v3', JSON.stringify(attendanceData));
-                syncToCloud();
+                isAttendanceDirty = true;
+                syncToCloud(true);
                 initAdminView();
                 showAlert('نجاح', 'تمت استعادة البيانات بنجاح ✅');
             } else {
@@ -7147,7 +7376,8 @@ window.importStudents = function(event) {
                 showConfirm('استيراد إكسل', `تم العثور على ${imported.length} طالب. هل تريد استبدال القائمة الحالية (نعم) أو الإضافة إليها (إلغاء)?`, () => {
                     students = sortStudentsAlphabetically(imported);
                     localStorage.setItem('students_list_master_v3', JSON.stringify(students));
-                    syncToCloud();
+                    isAttendanceDirty = true;
+                    syncToCloud(true);
                     populateClassFilter();
                     renderTable();
                     showAlert('نجاح', `تم استيراد ${imported.length} طالب بنجاح ✅`);
@@ -7165,7 +7395,8 @@ window.confirmDeleteAllData = function() {
         students = [];
         attendanceData = {};
         localStorage.clear();
-        syncToCloud();
+        isAttendanceDirty = true;
+        syncToCloud(true);
         initAdminView();
         showAlert('تم', 'تم مسح جميع البيانات بنجاح');
     });
@@ -7217,4 +7448,10 @@ const showConfirm = window.showConfirm;
 window.addEventListener('DOMContentLoaded', () => {
     updateAdminEmailDisplays();
     initCloudListeners();
+});
+
+window.addEventListener('beforeunload', () => {
+    if (isAttendanceDirty || hasPendingSync || syncDebounceTimer) {
+        syncToCloud(true);
+    }
 });
