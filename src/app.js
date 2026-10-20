@@ -4025,178 +4025,192 @@ window.openRiskModal = function() {
 window.openPdfPrintModal = function() { openModal('pdfPrintModal'); };
 
 window.printHtmlDocument = function(contentHtml, docTitle = 'تقرير_مدرسي') {
-    if (window.showBottomNotification) {
-        window.showBottomNotification('جاري فتح أمر الطباعة 🖨️', 'يرجى اختيار الطابعة أو حفظ بتنسيق PDF في نافذة الطباعة', 'info');
-    }
-
     // 1. Populate #printArea for browser @media print
     const printArea = document.getElementById('printArea');
     if (printArea) {
-        printArea.innerHTML = contentHtml;
+        printArea.innerHTML = `
+            <div style="direction: rtl; text-align: right; font-family: 'Tajawal', Arial, Tahoma, sans-serif; color: #0f172a; background: #ffffff;">
+                ${contentHtml}
+            </div>
+        `;
     }
 
-    // 2. Prepare isolated iframe with non-zero dimensions (required by Chrome)
-    let iframe = document.getElementById('printIsolatedIframe');
-    if (!iframe) {
-        iframe = document.createElement('iframe');
+    if (window.showBottomNotification) {
+        window.showBottomNotification('جاري فتح أمر الطباعة 🖨️', 'يرجى اختيار الطابعة أو الحفظ بتنسيق PDF في نافذة الطباعة', 'info');
+    }
+
+    // 2. Remove any previous isolated iframe so each print uses a completely fresh context
+    const oldIframe = document.getElementById('printIsolatedIframe');
+    if (oldIframe && oldIframe.parentNode) {
+        oldIframe.parentNode.removeChild(oldIframe);
+    }
+
+    // Helper: direct native print attempt on main window
+    const tryDirectPrint = () => {
+        try {
+            window.focus();
+            window.print();
+            return true;
+        } catch (e) {
+            console.warn('window.print() blocked by browser sandbox/security:', e);
+            return false;
+        }
+    };
+
+    // Helper: export as high-quality PDF fallback
+    const fallbackToPdf = () => {
+        if (window.exportHtmlToPdf) {
+            if (window.showBottomNotification) {
+                window.showBottomNotification('تجهيز ملف PDF للطباعة 📄', 'تم تصدير التقرير كملف PDF عالي الدقة لسهولة طباعته وحفظه.', 'success');
+            }
+            window.exportHtmlToPdf(contentHtml, `${docTitle}.pdf`);
+        }
+    };
+
+    // 3. Create fresh iframe for isolated print
+    try {
+        const iframe = document.createElement('iframe');
         iframe.id = 'printIsolatedIframe';
         iframe.style.position = 'fixed';
-        iframe.style.left = '-9999px';
-        iframe.style.top = '0';
-        iframe.style.width = '1000px';
-        iframe.style.height = '1400px';
-        iframe.style.border = '0';
-        iframe.style.opacity = '0';
+        iframe.style.bottom = '10px';
+        iframe.style.right = '10px';
+        iframe.style.width = '10px';
+        iframe.style.height = '10px';
+        iframe.style.border = 'none';
+        iframe.style.opacity = '0.05';
+        iframe.style.zIndex = '-9999';
         iframe.style.pointerEvents = 'none';
         document.body.appendChild(iframe);
-    }
 
-    const printDoc = `
-        <!DOCTYPE html>
-        <html dir="rtl" lang="ar">
-        <head>
-            <meta charset="utf-8">
-            <title>${docTitle}</title>
-            <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
-            <style>
-                @page {
-                    size: A4 portrait;
-                    margin: 8mm 10mm 8mm 10mm;
-                }
-                * {
-                    box-sizing: border-box;
-                    -webkit-print-color-adjust: exact !important;
-                    print-color-adjust: exact !important;
-                    font-family: 'Tajawal', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                }
-                :root {
-                    --bg-body: #ffffff;
-                    --bg-card: #ffffff;
-                    --text-main: #0f172a;
-                    --text-muted: #475569;
-                    --border-color: #cbd5e1;
-                    --primary: #1e3a8a;
-                    --primary-light: #e0e7ff;
-                    --danger: #e11d48;
-                    --danger-light: #ffe4e6;
-                    --success: #15803d;
-                    --success-light: #dcfce7;
-                    --warning: #d97706;
-                    --warning-light: #fef3c7;
-                }
-                body {
-                    margin: 0;
-                    padding: 8px 12px;
-                    direction: rtl;
-                    text-align: right;
-                    color: #0f172a;
-                    background: #ffffff;
-                    font-size: 13px;
-                    line-height: 1.6;
-                }
-                .official-letterhead {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    border-bottom: 2px solid #0f172a;
-                    padding-bottom: 10px;
-                    margin-bottom: 14px;
-                }
-                .letterhead-right, .letterhead-left {
-                    font-size: 12px;
-                    font-weight: 700;
-                    line-height: 1.5;
-                }
-                .letterhead-center {
-                    text-align: center;
-                }
-                .letterhead-center h2 {
-                    margin: 0 0 4px 0;
-                    font-size: 18px;
-                    color: #0f172a;
-                    font-weight: 800;
-                }
-                .letterhead-center .sub {
-                    font-size: 12.5px;
-                    color: #475569;
-                    font-weight: 600;
-                }
-                .doc-box {
-                    border: 1px solid #cbd5e1;
-                    border-radius: 8px;
-                    padding: 10px 14px;
-                    margin-bottom: 12px;
-                    background: #f8fafc;
-                }
-                .html2pdf__page-break {
-                    page-break-before: always !important;
-                    break-before: page !important;
-                    display: block;
-                    height: 0;
-                    margin: 0;
-                    padding: 0;
-                    border: none;
-                }
-                .official-pdf-page {
-                    page-break-inside: avoid;
-                    break-inside: avoid;
-                }
-                table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin: 8px 0;
-                }
-                th, td {
-                    padding: 6px 8px;
-                    text-align: right;
-                    font-size: 11.5px;
-                }
-                .sig-container {
-                    margin-top: 25px;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: flex-start;
-                    font-weight: bold;
-                    font-size: 12.5px;
-                    page-break-inside: avoid;
-                }
-                .sig-box {
-                    text-align: center;
-                    width: 32%;
-                }
-                @media print {
-                    body {
-                        padding: 0;
+        const printDoc = `
+            <!DOCTYPE html>
+            <html dir="rtl" lang="ar">
+            <head>
+                <meta charset="utf-8">
+                <title>${docTitle}</title>
+                <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+                <style>
+                    @page {
+                        size: A4 portrait;
+                        margin: 8mm 10mm 8mm 10mm;
+                    }
+                    * {
+                        box-sizing: border-box;
                         -webkit-print-color-adjust: exact !important;
                         print-color-adjust: exact !important;
+                        font-family: 'Tajawal', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                     }
-                }
-            </style>
-        </head>
-        <body>
-            ${contentHtml}
-        </body>
-        </html>
-    `;
+                    body {
+                        margin: 0;
+                        padding: 8px 12px;
+                        direction: rtl;
+                        text-align: right;
+                        color: #0f172a;
+                        background: #ffffff;
+                        font-size: 13px;
+                        line-height: 1.6;
+                    }
+                    .official-letterhead {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: center;
+                        border-bottom: 2px solid #0f172a;
+                        padding-bottom: 10px;
+                        margin-bottom: 14px;
+                    }
+                    .letterhead-right, .letterhead-left {
+                        font-size: 12px;
+                        font-weight: 700;
+                        line-height: 1.5;
+                    }
+                    .letterhead-center {
+                        text-align: center;
+                    }
+                    .letterhead-center h2 {
+                        margin: 0 0 4px 0;
+                        font-size: 18px;
+                        color: #0f172a;
+                        font-weight: 800;
+                    }
+                    .letterhead-center .sub {
+                        font-size: 12.5px;
+                        color: #475569;
+                        font-weight: 600;
+                    }
+                    .doc-box {
+                        border: 1px solid #cbd5e1;
+                        border-radius: 8px;
+                        padding: 10px 14px;
+                        margin-bottom: 12px;
+                        background: #f8fafc;
+                    }
+                    table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        margin: 8px 0;
+                    }
+                    th, td {
+                        padding: 6px 8px;
+                        text-align: right;
+                        font-size: 11.5px;
+                    }
+                    .sig-container {
+                        margin-top: 25px;
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: flex-start;
+                        font-weight: bold;
+                        font-size: 12.5px;
+                        page-break-inside: avoid;
+                    }
+                    .sig-box {
+                        text-align: center;
+                        width: 32%;
+                    }
+                    @media print {
+                        body {
+                            padding: 0;
+                            -webkit-print-color-adjust: exact !important;
+                            print-color-adjust: exact !important;
+                        }
+                    }
+                </style>
+            </head>
+            <body>
+                ${contentHtml}
+            </body>
+            </html>
+        `;
 
-    try {
         const iDoc = iframe.contentWindow.document;
         iDoc.open();
         iDoc.write(printDoc);
         iDoc.close();
 
+        // Print quickly with minimal delay to keep user activation gesture alive
         setTimeout(() => {
+            let printed = false;
             try {
                 iframe.contentWindow.focus();
                 iframe.contentWindow.print();
+                printed = true;
             } catch (err) {
                 console.warn('Iframe print error, falling back to window.print():', err);
-                window.print();
+                printed = tryDirectPrint();
             }
-        }, 350);
+
+            // In sandbox iframes where print is blocked silently
+            if (!printed && window.self !== window.top) {
+                fallbackToPdf();
+            }
+        }, 120);
+
     } catch (e) {
-        console.warn('Iframe access error, falling back to window.print():', e);
-        window.print();
+        console.warn('Iframe setup error, falling back to window.print():', e);
+        const printed = tryDirectPrint();
+        if (!printed) {
+            fallbackToPdf();
+        }
     }
 };
 
@@ -6521,6 +6535,142 @@ window.exportMorningPraisePdf = function(className) {
 };
 window.printMorningPraise = window.exportMorningPraisePdf;
 
+window.printChartsReport = function() {
+    const rangeLabel = currentChartSelectedRange === 'week' ? 'آخر 7 أيام عمل مسجلة' : (currentChartSelectedRange === 'all' ? 'الشهر كاملاً (الأرشيف)' : `اليوم (${currentSelectedDate})`);
+    
+    // Get chart images
+    const canvasStatus = document.getElementById('chartStatusDistribution');
+    const canvasClass = document.getElementById('chartClassComparison');
+    const canvasTimeline = document.getElementById('chartTimelineTrend');
+
+    let imgStatus = '';
+    let imgClass = '';
+    let imgTimeline = '';
+
+    try { if (canvasStatus) imgStatus = canvasStatus.toDataURL('image/png'); } catch (e) {}
+    try { if (canvasClass) imgClass = canvasClass.toDataURL('image/png'); } catch (e) {}
+    try { if (canvasTimeline) imgTimeline = canvasTimeline.toDataURL('image/png'); } catch (e) {}
+
+    const pPct = document.getElementById('chartMetricPresent')?.innerText || '0%';
+    const aPct = document.getElementById('chartMetricAbsent')?.innerText || '0%';
+    const lPct = document.getElementById('chartMetricLate')?.innerText || '0%';
+    const ePct = document.getElementById('chartMetricExcused')?.innerText || '0%';
+
+    // Build classes summary rows
+    const classes = Object.keys(currentChartClassStats || {}).sort();
+    let classRows = '';
+    classes.forEach(c => {
+        const cs = currentChartClassStats[c] || {};
+        const total = cs.total || 0;
+        const pres = cs.present || 0;
+        const abs = cs.absent || 0;
+        const late = cs.late || 0;
+        const rate = total > 0 ? Math.round((pres / total) * 100) : (total === 0 ? 100 : 0);
+        classRows += `
+            <tr style="border-bottom: 1px solid #cbd5e1;">
+                <td style="padding: 6px 8px; font-weight: 700; color: #1e3a8a;">${c}</td>
+                <td style="padding: 6px 8px; text-align: center;">${cs.allStudents?.length || 0}</td>
+                <td style="padding: 6px 8px; text-align: center; color: #15803d; font-weight: 700;">${pres}</td>
+                <td style="padding: 6px 8px; text-align: center; color: #b91c1c; font-weight: 700;">${abs}</td>
+                <td style="padding: 6px 8px; text-align: center; color: #b45309; font-weight: 700;">${late}</td>
+                <td style="padding: 6px 8px; text-align: center; font-weight: 800; color: ${rate >= 90 ? '#15803d' : '#b91c1c'};">${rate}%</td>
+            </tr>
+        `;
+    });
+
+    const html = `
+        <div class="official-letterhead">
+            <div class="letterhead-right" style="min-width: 180px; text-align: right;">
+                المملكة العربية السعودية<br>
+                وزارة التعليم<br>
+                الإدارة العامة للتعليم بمحافظة الأحساء<br>
+                مدرسة الجشة المتوسطة - قسم التوجيه الطلابي
+            </div>
+            <div class="letterhead-center" style="flex: 1; text-align: center;">
+                <h2>تقرير مؤشرات الانضباط والرسوم البيانية الإحصائية</h2>
+                <div class="sub">النطاق الزمني: ${rangeLabel} | تاريخ الطباعة: ${currentSelectedDate}</div>
+            </div>
+            <div class="letterhead-left" style="min-width: 180px; visibility: hidden;" aria-hidden="true">
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-bottom: 14px;">
+            <div style="flex: 1; border: 1px solid #bbf7d0; background: #f0fdf4; border-radius: 8px; padding: 8px; text-align: center;">
+                <span style="font-size: 11px; color: #15803d; font-weight: bold; display: block;">نسبة الحضور</span>
+                <strong style="font-size: 18px; color: #166534;">${pPct}</strong>
+            </div>
+            <div style="flex: 1; border: 1px solid #fecdd3; background: #fff1f2; border-radius: 8px; padding: 8px; text-align: center;">
+                <span style="font-size: 11px; color: #b91c1c; font-weight: bold; display: block;">نسبة الغياب</span>
+                <strong style="font-size: 18px; color: #991b1b;">${aPct}</strong>
+            </div>
+            <div style="flex: 1; border: 1px solid #fde68a; background: #fffbeb; border-radius: 8px; padding: 8px; text-align: center;">
+                <span style="font-size: 11px; color: #b45309; font-weight: bold; display: block;">نسبة التأخر</span>
+                <strong style="font-size: 18px; color: #92400e;">${lPct}</strong>
+            </div>
+            <div style="flex: 1; border: 1px solid #bae6fd; background: #f0f9ff; border-radius: 8px; padding: 8px; text-align: center;">
+                <span style="font-size: 11px; color: #0369a1; font-weight: bold; display: block;">نسبة الأعذار</span>
+                <strong style="font-size: 18px; color: #075985;">${ePct}</strong>
+            </div>
+        </div>
+
+        <div style="margin-bottom: 14px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 11.5px; border: 1px solid #cbd5e1;">
+                <thead>
+                    <tr style="background: #008375; color: white;">
+                        <th style="padding: 6px 8px; text-align: right;">الصف / الفصل</th>
+                        <th style="padding: 6px 8px; text-align: center;">الطلاب</th>
+                        <th style="padding: 6px 8px; text-align: center;">الحضور</th>
+                        <th style="padding: 6px 8px; text-align: center;">الغياب</th>
+                        <th style="padding: 6px 8px; text-align: center;">التأخر</th>
+                        <th style="padding: 6px 8px; text-align: center;">نسبة المواظبة</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${classRows || '<tr><td colspan="6" style="text-align: center; padding: 10px;">لا توجد بيانات مسجلة</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; page-break-inside: avoid;">
+            ${imgStatus ? `
+            <div style="border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; text-align: center; background: #ffffff;">
+                <div style="font-weight: bold; font-size: 12px; margin-bottom: 6px; color: #1e3a8a;">توزيع حالات الطلاب (الحضور والغياب)</div>
+                <img src="${imgStatus}" style="max-width: 100%; max-height: 190px; object-fit: contain;">
+            </div>` : ''}
+            ${imgClass ? `
+            <div style="border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; text-align: center; background: #ffffff;">
+                <div style="font-weight: bold; font-size: 12px; margin-bottom: 6px; color: #1e3a8a;">مقارنة الغياب والتأخر حسب الفصول</div>
+                <img src="${imgClass}" style="max-width: 100%; max-height: 190px; object-fit: contain;">
+            </div>` : ''}
+        </div>
+
+        ${imgTimeline ? `
+        <div style="border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; text-align: center; background: #ffffff; margin-bottom: 14px; page-break-inside: avoid;">
+            <div style="font-weight: bold; font-size: 12px; margin-bottom: 6px; color: #1e3a8a;">المسار الزمني لمعدل الانضباط والغياب</div>
+            <img src="${imgTimeline}" style="max-width: 100%; max-height: 170px; object-fit: contain;">
+        </div>` : ''}
+
+        <div class="sig-container" style="page-break-inside: avoid;">
+            <div class="sig-box">
+                الموجه الطلابي بالمدرسة<br><br>
+                <strong>عبدالهادي بن محمد المحسن</strong><br>
+                التوقيع: ............................
+            </div>
+            <div class="sig-box">
+                ختم المدرسة الرسمي<br><br>
+                ( ............................ )
+            </div>
+            <div class="sig-box">
+                مدير مدرسة الجشة المتوسطة<br><br>
+                <strong>أحمد بن ناصر الدوسري</strong><br>
+                التوقيع: ............................
+            </div>
+        </div>
+    `;
+
+    window.printHtmlDocument(html, `تقرير_الرسوم_البيانية_${currentSelectedDate}`);
+};
+
 // ------------------------------------------
 // C. الخطة العلاجية للحد من الغياب المدرسي
 // ------------------------------------------
@@ -6700,24 +6850,20 @@ window.exportAbsenceRemedialPlanWord = function() {
     downloadWordDoc(body, `الخطة_العلاجية_للغياب_${currentSelectedDate}.doc`);
 };
 
-window.printAbsenceRemedialPlan = function() {
-    const html = `
+function getAbsenceRemedialPlanHtml() {
+    return `
         <div class="official-letterhead">
-            <div class="letterhead-right">
+            <div class="letterhead-right" style="min-width: 180px; text-align: right;">
                 المملكة العربية السعودية<br>
                 وزارة التعليم<br>
                 الإدارة العامة للتعليم بمحافظة الأحساء<br>
                 مدرسة الجشة المتوسطة - قسم التوجيه الطلابي
             </div>
-            <div class="letterhead-center">
+            <div class="letterhead-center" style="flex: 1; text-align: center;">
                 <h2>الخطة الإجرائية والعلاجية للتعامل مع غياب الطلاب</h2>
                 <div class="sub">وفق الإجراءات والضوابط المعتمدة بحذافيرها (3 - 5 - 10 أيام) | التاريخ: ${currentSelectedDate}</div>
             </div>
-            <div class="letterhead-left" style="text-align: left;">
-                إعداد: الموجه الطلابي<br>
-                <strong>عبدالهادي بن محمد المحسن</strong><br>
-                الاعتماد: مدير المدرسة<br>
-                <strong>أحمد بن ناصر الدوسري</strong>
+            <div class="letterhead-left" style="min-width: 180px; visibility: hidden;" aria-hidden="true">
             </div>
         </div>
 
@@ -6793,8 +6939,23 @@ window.printAbsenceRemedialPlan = function() {
             </div>
         </div>
     `;
+}
 
+window.printAbsenceRemedialPlan = function() {
+    const html = getAbsenceRemedialPlanHtml();
     window.printHtmlDocument(html, `الخطة_العلاجية_للغياب_${currentSelectedDate}`);
+};
+
+window.downloadAbsenceRemedialPlanPdf = function() {
+    const html = `
+        <div class="official-pdf-page" style="direction: rtl; text-align: right; font-family: 'Tajawal', Arial, Tahoma, sans-serif !important; color: #0f172a; background: #ffffff; width: 794px; box-sizing: border-box; padding: 16px 20px;">
+            ${getAbsenceRemedialPlanHtml()}
+        </div>
+    `;
+    window.exportHtmlToPdf(html, `الخطة_العلاجية_للغياب_${currentSelectedDate}.pdf`, {
+        margin: [5, 5, 5, 5],
+        padding: '12px 16px'
+    });
 };
 
 // ------------------------------------------
@@ -6969,24 +7130,20 @@ window.exportTardinessRemedialPlanWord = function() {
     downloadWordDoc(body, `خطة_علاج_التأخر_الصباحي_${currentSelectedDate}.doc`);
 };
 
-window.printTardinessRemedialPlan = function() {
-    const html = `
+function getTardinessRemedialPlanHtml() {
+    return `
         <div class="official-letterhead">
-            <div class="letterhead-right">
+            <div class="letterhead-right" style="min-width: 180px; text-align: right;">
                 المملكة العربية السعودية<br>
                 وزارة التعليم<br>
                 الإدارة العامة للتعليم بمحافظة الأحساء<br>
                 مدرسة الجشة المتوسطة - قسم التوجيه الطلابي
             </div>
-            <div class="letterhead-center">
+            <div class="letterhead-center" style="flex: 1; text-align: center;">
                 <h2>خطة علاج التأخر الصباحي - مبادرة "فرسان البكور"</h2>
                 <div class="sub">العام الدراسي 1448هـ | التاريخ: ${currentSelectedDate}</div>
             </div>
-            <div class="letterhead-left" style="text-align: left;">
-                إعداد: الموجه الطلابي<br>
-                <strong>عبدالهادي بن محمد المحسن</strong><br>
-                الاعتماد: مدير المدرسة<br>
-                <strong>أحمد بن ناصر الدوسري</strong>
+            <div class="letterhead-left" style="min-width: 180px; visibility: hidden;" aria-hidden="true">
             </div>
         </div>
 
@@ -7051,8 +7208,23 @@ window.printTardinessRemedialPlan = function() {
             </div>
         </div>
     `;
+}
 
+window.printTardinessRemedialPlan = function() {
+    const html = getTardinessRemedialPlanHtml();
     window.printHtmlDocument(html, `خطة_علاج_التأخر_الصباحي_${currentSelectedDate}`);
+};
+
+window.downloadTardinessRemedialPlanPdf = function() {
+    const html = `
+        <div class="official-pdf-page" style="direction: rtl; text-align: right; font-family: 'Tajawal', Arial, Tahoma, sans-serif !important; color: #0f172a; background: #ffffff; width: 794px; box-sizing: border-box; padding: 16px 20px;">
+            ${getTardinessRemedialPlanHtml()}
+        </div>
+    `;
+    window.exportHtmlToPdf(html, `خطة_علاج_التأخر_الصباحي_${currentSelectedDate}.pdf`, {
+        margin: [5, 5, 5, 5],
+        padding: '12px 16px'
+    });
 };
 
 // ------------------------------------------

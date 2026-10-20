@@ -1310,7 +1310,12 @@
                         <span style="font-size: 13px; color: var(--text-muted); font-weight: 600;">تحليل بياني تفاعلي للحضور والغياب والتأخر</span>
                     </div>
                 </div>
-                <button class="close-btn" onclick="window.closeModals()">&times;</button>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button class="btn" style="background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; padding: 6px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; gap: 6px; cursor: pointer;" onclick="window.printChartsReport()" title="طباعة الرسوم البيانية ومؤشرات الانضباط">
+                        🖨️ طباعة الرسوم البيانية
+                    </button>
+                    <button class="close-btn" onclick="window.closeModals()">&times;</button>
+                </div>
             </div>
 
             <!-- محدد النطاق الزمني للرسوم البيانية -->
@@ -1476,7 +1481,10 @@
                 </div>
             </div>
 
-            <div style="display: flex; justify-content: flex-end; margin-top: 18px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px; flex-wrap: wrap; gap: 10px;">
+                <button class="modal-btn" style="background: #0284c7; color: white; max-width: 190px;" onclick="window.printChartsReport()">
+                    طباعة الرسوم البيانية 🖨️
+                </button>
                 <button class="modal-btn" style="background: #f1f5f9; color: var(--text-main); max-width: 140px;" onclick="window.closeModals()">
                     إغلاق
                 </button>
@@ -1547,10 +1555,16 @@
                     </div>
                     <div>
                         <h3 style="color: #065f46; margin: 0; font-size: 19px; font-weight: 800;">الخطة العلاجية للحد من الغياب المدرسي</h3>
-                        <span style="font-size: 13px; color: var(--text-muted); font-weight: 600;">مدرسة الجشة المتوسطة - قسم التوجيه الطلابي | إعداد: الموجه الطلابي عبدالهادي المحسن</span>
+                        <span style="font-size: 13px; color: var(--text-muted); font-weight: 600;">مدرسة الجشة المتوسطة - قسم التوجيه الطلابي</span>
                     </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <button class="btn" style="background: #eff6ff; color: #2563eb; border: 1.5px solid #bfdbfe; padding: 6px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; gap: 6px; cursor: pointer;" onclick="window.exportAbsenceRemedialPlanWord()" title="تصدير وثيقة الخطة بصيغة Word">
+                        📄 ملف Word
+                    </button>
+                    <button class="btn" style="background: #0284c7; color: white; border: none; padding: 6px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; gap: 6px; cursor: pointer;" onclick="window.downloadAbsenceRemedialPlanPdf()" title="تصدير وثيقة الخطة بصيغة PDF">
+                        📥 تصدير PDF
+                    </button>
                     <button class="btn" style="background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; padding: 6px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; gap: 6px; cursor: pointer;" onclick="window.printAbsenceRemedialPlan()" title="طباعة رسمية للخطة العلاجية">
                         🖨️ طباعة رسمية
                     </button>
@@ -1660,14 +1674,17 @@
                 </div>
             </div>
 
-            <div style="display: flex; gap: 12px; margin-top: 18px; border-top: 1px solid var(--border-color); padding-top: 15px; flex-wrap: wrap;">
-                <button class="modal-btn" style="flex: 1; background: linear-gradient(135deg, #10b981, #047857);" onclick="window.exportAbsenceRemedialPlanWord()">
-                    تصدير وثيقة الخطة العلاجية للغياب (Word) 📄
+            <div style="display: flex; gap: 10px; margin-top: 18px; border-top: 1px solid var(--border-color); padding-top: 15px; flex-wrap: wrap;">
+                <button class="modal-btn" style="flex: 1; min-width: 150px; background: linear-gradient(135deg, #10b981, #047857);" onclick="window.exportAbsenceRemedialPlanWord()">
+                    تصدير وثيقة الخطة (Word) 📄
                 </button>
-                <button class="modal-btn" style="background: #0284c7; color: white; max-width: 170px;" onclick="window.printAbsenceRemedialPlan()">
+                <button class="modal-btn" style="background: #0284c7; color: white; min-width: 130px;" onclick="window.downloadAbsenceRemedialPlanPdf()">
+                    تصدير PDF 📥
+                </button>
+                <button class="modal-btn" style="background: #0f766e; color: white; min-width: 130px;" onclick="window.printAbsenceRemedialPlan()">
                     طباعة رسمية 🖨️
                 </button>
-                <button class="modal-btn" style="background: #f1f5f9; color: var(--text-main); max-width: 120px;" onclick="window.closeModals()">
+                <button class="modal-btn" style="background: #f1f5f9; color: var(--text-main); min-width: 90px;" onclick="window.closeModals()">
                     إغلاق
                 </button>
             </div>
@@ -1684,10 +1701,16 @@
                     </div>
                     <div>
                         <h3 style="color: #92400e; margin: 0; font-size: 19px; font-weight: 800;">الخطة العلاجية للحد من التأخر الصباحي (فرسان البكور)</h3>
-                        <span style="font-size: 13px; color: var(--text-muted); font-weight: 600;">مدرسة الجشة المتوسطة - قسم التوجيه الطلابي | إعداد: الموجه الطلابي عبدالهادي المحسن</span>
+                        <span style="font-size: 13px; color: var(--text-muted); font-weight: 600;">مدرسة الجشة المتوسطة - قسم التوجيه الطلابي</span>
                     </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <button class="btn" style="background: #eff6ff; color: #2563eb; border: 1.5px solid #bfdbfe; padding: 6px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; gap: 6px; cursor: pointer;" onclick="window.exportTardinessRemedialPlanWord()" title="تصدير وثيقة الخطة بصيغة Word">
+                        📄 ملف Word
+                    </button>
+                    <button class="btn" style="background: #0284c7; color: white; border: none; padding: 6px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; gap: 6px; cursor: pointer;" onclick="window.downloadTardinessRemedialPlanPdf()" title="تصدير وثيقة الخطة بصيغة PDF">
+                        📥 تصدير PDF
+                    </button>
                     <button class="btn" style="background: #fef3c7; color: #b45309; border: 1px solid #fde68a; padding: 6px 14px; font-size: 13px; font-weight: 700; border-radius: 8px; display: flex; align-items: center; gap: 6px; cursor: pointer;" onclick="window.printTardinessRemedialPlan()" title="طباعة خطة التأخر الصباحي">
                         🖨️ طباعة رسمية
                     </button>
@@ -1785,14 +1808,17 @@
                 </div>
             </div>
 
-            <div style="display: flex; gap: 12px; margin-top: 18px; border-top: 1px solid var(--border-color); padding-top: 15px; flex-wrap: wrap;">
-                <button class="modal-btn" style="flex: 1; background: linear-gradient(135deg, #f59e0b, #b45309);" onclick="window.exportTardinessRemedialPlanWord()">
-                    تصدير وثيقة الخطة العلاجية للتأخر (Word) 📄
+            <div style="display: flex; gap: 10px; margin-top: 18px; border-top: 1px solid var(--border-color); padding-top: 15px; flex-wrap: wrap;">
+                <button class="modal-btn" style="flex: 1; min-width: 150px; background: linear-gradient(135deg, #f59e0b, #b45309);" onclick="window.exportTardinessRemedialPlanWord()">
+                    تصدير وثيقة الخطة (Word) 📄
                 </button>
-                <button class="modal-btn" style="background: #0284c7; color: white; max-width: 170px;" onclick="window.printTardinessRemedialPlan()">
+                <button class="modal-btn" style="background: #0284c7; color: white; min-width: 130px;" onclick="window.downloadTardinessRemedialPlanPdf()">
+                    تصدير PDF 📥
+                </button>
+                <button class="modal-btn" style="background: #0f766e; color: white; min-width: 130px;" onclick="window.printTardinessRemedialPlan()">
                     طباعة رسمية 🖨️
                 </button>
-                <button class="modal-btn" style="background: #f1f5f9; color: var(--text-main); max-width: 120px;" onclick="window.closeModals()">
+                <button class="modal-btn" style="background: #f1f5f9; color: var(--text-main); min-width: 90px;" onclick="window.closeModals()">
                     إغلاق
                 </button>
             </div>
